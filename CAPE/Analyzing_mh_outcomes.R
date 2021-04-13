@@ -272,6 +272,8 @@ depr_base <- lmerTest::lmer(Depression ~ Sex + Age_2020 + (1|Study/ID), data=ALL
 
 #Mixed model testing with Pre vs Post
 depr_doc_2 <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
+#rdepr_doc_2 <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + (1|Study/ID)+ (0+PrePost|Study), data=ALL_int_self)
+#Random slope models did not converge and therefore no random slopes were added in the moderator models below
 anova(depr_base,depr_doc_2)
 summary(depr_doc_2)
 
@@ -296,6 +298,8 @@ anx_base <- lmerTest::lmer(Anxiety ~ Sex + Age_2020 + (1|Study/ID), data=ALL_int
 
 #Mixed model testing with Pre vs Post
 anx_doc_2 <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
+#ranx_doc_2 <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID)+ (0+PrePost|Study), data=ALL_int_self)
+#Random slope models did not converge and therefore no random slopes were added in the moderator models below
 anova(anx_base,anx_doc_2)
 
 #Age moderation
@@ -346,14 +350,18 @@ ggplot(ALL_int_self,aes(x=PrePost,y=Depression)) +
   stat_smooth(aes(group = Study,color=Study),method="lm",se=F)
 
 #Age
-ggplot(ALL_int_self,aes(x=Age_2020,y=Depression)) + 
+ALL_int_self_dep_full <- ALL_int_self %>% 
+  dplyr::select(ID, Study, Sex, Age_2020, PrePost, Depression) %>%
+  na.omit(.)
+ALL_int_self_dep_full$pred_depr = predict(depr_doc_age_2,type="response")
+ggplot(ALL_int_self_dep_full,aes(x=Age_2020,y=Depression)) + 
   geom_point(aes(color=PrePost,shape=PrePost)) + 
-  geom_smooth(method="loess",color='black',aes(fill=PrePost,linetype=PrePost)) +
+  geom_smooth(method="lm",color='black',aes(x=Age_2020, y=pred_depr,fill=PrePost,linetype=PrePost)) +
   scale_fill_manual(values=c("#00BFC4","#F8766D")) +
   scale_color_manual(values=c("#00BFC4","#F8766D")) +
   theme_minimal(base_size = 14) +
   theme(legend.title = element_blank()) +
-  labs(x="Age", y="Depression symptoms") 
+  labs(x="Age in March 2020", y="Depression symptoms") 
 
 
 ############## Anxiety 
@@ -383,14 +391,18 @@ ggplot(ALL_int_self,aes(x=PrePost,y=Anxiety)) +
   stat_smooth(aes(group = Study,color=Study),method="lm",se=F)
 
 #Age
-ggplot(ALL_int_self,aes(x=Age_2020,y=Anxiety)) + 
+ALL_int_self_anx_full <- ALL_int_self %>% 
+  dplyr::select(ID, Study, Sex, Age_2020, PrePost, Anxiety) %>%
+  na.omit(.)
+ALL_int_self_anx_full$pred_anx = predict(anx_doc_age_2,type="response")
+ggplot(ALL_int_self_anx_full,aes(x=Age_2020,y=Anxiety)) + 
   geom_point(aes(color=PrePost,shape=PrePost)) + 
-  geom_smooth(method="loess",color='black',aes(fill=PrePost,linetype=PrePost)) +
+  geom_smooth(method="lm",color='black',aes(x=Age_2020,y=pred_anx,fill=PrePost,linetype=PrePost)) +
   scale_fill_manual(values=c("#00BFC4","#F8766D")) +
   scale_color_manual(values=c("#00BFC4","#F8766D")) +
   theme_minimal(base_size = 14) +
   theme(legend.title = element_blank()) +
-  labs(x="Age", y="Anxiety symptoms")  
+  labs(x="Age in March 2020", y="Anxiety symptoms")  
 
 
 #####################
@@ -409,19 +421,17 @@ timespan <- pivot_wider(timespan,names_from = PrePost,
   mutate(totalspan=difftime(latestdate_During, earliestdate_Pre, units = "weeks")/52)
 ALL_int_self_span <- merge(ALL_int_self,timespan[c("ID","totalspan")])
 
-depr_span <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + totalspan + (1|Study/ID), data=ALL_int_self_span)
-anx_span <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + totalspan + (1|Study/ID), data=ALL_int_self_span)
-depr_span_age <- lmerTest::lmer(Depression ~ PrePost*scale(Age_2020) + Sex + totalspan + (1|Study/ID), data=ALL_int_self_span)
-anx_span_age <- lmerTest::lmer(Anxiety ~ PrePost*scale(Age_2020) + Sex + totalspan + (1|Study/ID), data=ALL_int_self_span)
+depr_span <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + PrePost:totalspan + (1|Study/ID), data=ALL_int_self_span)
+anx_span <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + PrePost:totalspan + (1|Study/ID), data=ALL_int_self_span)
 
-ggplot(ALL_int_self_span,aes(x=totalspan,y=Depression)) + 
+ggplot(ALL_int_self_span,aes(x=totalspan,y=Anxiety)) + 
   geom_point(aes(color=PrePost,shape=PrePost)) + 
-  geom_smooth(method="loess",color='black',aes(fill=PrePost,linetype=PrePost)) +
+  geom_smooth(method="lm",color='black',aes(fill=PrePost,linetype=PrePost)) +
   scale_fill_manual(values=c("#00BFC4","#F8766D")) +
   scale_color_manual(values=c("#00BFC4","#F8766D")) +
   theme_minimal(base_size = 14) +
   theme(legend.title = element_blank()) +
-  labs(x="Timespan", y="Depression symptoms")  
+  labs(x="Timespan", y="Anxiety symptoms")  
 
 
 #####################
@@ -816,6 +826,39 @@ ggplot(ALL_int_self_restric_mid,aes(x=Strictness,y=Anxiety)) +
   labs(x="Level of government restrictions", y="Anxiety symptoms")
 
 
+################ 
+# 6b. Government restrictions and case/death rate in one model
+#
+#################
+
+ALL_int_self_burdenrestric <- merge(ALL_int_self_burden, median_restric,by="ID") %>% 
+  filter(!is.na(median_Strictness),!is.na(mean_cases),!is.na(mean_deaths))
+
+# Depression
+
+depr_doc_c2 <- lmerTest::lmer(Depression ~  PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+depr_doc_restr_forburden <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+depr_doc_cases_restr <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_cases)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+depr_doc_deaths_restr <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_deaths)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+
+anova(depr_doc_restr_forburden,depr_doc_cases_restr)
+anova(depr_doc_restr_forburden,depr_doc_deaths_restr)
+summary(depr_doc_cases_restr)
+summary(depr_doc_deaths_restr)
+
+#Anxiety
+
+anx_doc_c2 <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+anx_doc_restr_forburden <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+anx_doc_cases_restr <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_cases)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+anx_doc_deaths_restr <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_deaths)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+
+anova(anx_doc_restr_forburden,depr_doc_cases_restr)
+anova(anx_doc_restr_forburden,depr_doc_deaths_restr)
+summary(anx_doc_cases_restr)
+summary(anx_doc_deaths_restr)
+
+
 
 ###########################
 # 7. Effect sizes and descriptives
@@ -1010,3 +1053,110 @@ for (leavemeout in list_studies)
   
 }
 
+
+
+###############################
+# 9. Pre-pandemic slope
+#
+#
+###############################
+
+Pre_int_self <- ALL_int_self %>% 
+  filter(PrePost=="Pre")
+Pre_int_self_depr_full <- Pre_int_self %>% 
+  dplyr::select(ID, Study, Sex, Age, Depression) %>%
+  na.omit(.)
+Pre_int_self_anx_full <- Pre_int_self %>% 
+  dplyr::select(ID, Study, Sex, Age, Anxiety) %>%
+  na.omit(.)
+
+depr_pre_age1 <- lmerTest::lmer(Depression ~ Sex + Age + (1|Study/ID), data=Pre_int_self_depr_full)
+depr_pre_age2 <- lmerTest::lmer(Depression ~ Sex + Age + (1|Study/ID) + (0+Age|Study), data=Pre_int_self_depr_full)
+anx_pre_age1 <- lmerTest::lmer(Anxiety ~ Sex + Age + (1|Study/ID), data=Pre_int_self_anx_full)
+anx_pre_age2 <- lmerTest::lmer(Anxiety ~ Sex + Age + (1|Study/ID) + (0+Age|Study), data=Pre_int_self_anx_full)
+anova(depr_pre_age1,depr_pre_age2)
+anova(anx_pre_age1,anx_pre_age2)
+#random slope makes model better for depression but not anxiety
+
+Pre_int_self_depr_full$pred_depr = predict(depr_pre_age2,type="response")
+Pre_int_self_anx_full$pred_anx = predict(anx_pre_age1,type="response")
+
+ggplot(Pre_int_self_depr_full,aes(x=Age,y=Depression)) + 
+  geom_point(aes(color=Study)) + 
+  geom_smooth(method="lm",aes(x=Age,y=pred_depr,color=Study)) + 
+  theme_minimal() + scale_color_manual(values=pals::cols25(12)) +
+  labs(x="Age", y="Depression Symptoms")
+
+ggplot(Pre_int_self_anx_full,aes(x=Age,y=Anxiety)) + 
+  geom_point(aes(color=Study)) + 
+  geom_smooth(method="lm",aes(x=Age,y=pred_anx,color=Study)) + 
+  theme_minimal() + scale_color_manual(values=pals::cols25(12)) +
+  labs(x="Age", y="Anxiety Symptoms")
+
+###############################
+# 9. Meta-analysis of main change
+#
+#
+###############################
+
+#prepare data
+
+list_studies_depr <- as.vector(c("ARC","CAT","KLG","LIS","MFS","NTTTP","TAG","TGR"))
+list_studies_anx <- as.vector(c("ARC","BLP","CAT","EFC","KLG","LIS","MFS","SDS","TAB","TAG","TGR"))
+est_depr <- data.frame(study=as.character("NA"),est=as.integer(99),se=as.integer(99),onesex=as.integer(99), 
+                       stringsAsFactors=FALSE) 
+est_anx <- data.frame(study=as.character("NA"),est=as.integer(99),se=as.integer(99),onesex=as.integer(99), 
+                      stringsAsFactors=FALSE) 
+rightrow <- 0
+
+for (onestudy in list_studies_depr)
+{
+  ALL_int_self_one <- ALL_int_self %>% filter(Study==onestudy)
+  rightrow <- rightrow+1 
+  if (onestudy=="KLG"|onestudy=="TAG")
+  {
+    depr_main_1 <- lmerTest::lmer(Depression ~ PrePost + Age_2020 + (1|ID), data=ALL_int_self_one)
+    est_depr[rightrow,1] <- onestudy
+    est_depr[rightrow,2] <- summary(depr_main_1)$coefficients["PrePostDuring",1]
+    est_depr[rightrow,3] <- summary(depr_main_1)$coefficients["PrePostDuring",2]
+    est_depr[rightrow,4] <- 1
+  }
+  else {
+    depr_main_1 <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + (1|ID), data=ALL_int_self_one)
+    est_depr[rightrow,1] <- onestudy
+    est_depr[rightrow,2] <- summary(depr_main_1)$coefficients["PrePostDuring",1]
+    est_depr[rightrow,3] <- summary(depr_main_1)$coefficients["PrePostDuring",2]
+    est_depr[rightrow,4] <- 0
+  }
+}
+
+rightrow <- 0
+
+for (onestudy in list_studies_anx)
+{
+  ALL_int_self_one <- ALL_int_self %>% filter(Study==onestudy)
+  rightrow <- rightrow+1 
+  if (onestudy=="KLG"|onestudy=="TAG")
+  {
+    anx_main_1 <- lmerTest::lmer(Anxiety ~ PrePost + Age_2020 + (1|ID), data=ALL_int_self_one)
+    est_anx[rightrow,1] <- onestudy
+    est_anx[rightrow,2] <- summary(anx_main_1)$coefficients["PrePostDuring",1]
+    est_anx[rightrow,3] <- summary(anx_main_1)$coefficients["PrePostDuring",2]
+    est_anx[rightrow,4] <- 1
+  }
+  else {
+    anx_main_1 <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|ID), data=ALL_int_self_one)
+    est_anx[rightrow,1] <- onestudy
+    est_anx[rightrow,2] <- summary(anx_main_1)$coefficients["PrePostDuring",1]
+    est_anx[rightrow,3] <- summary(anx_main_1)$coefficients["PrePostDuring",2]
+    est_anx[rightrow,4] <- 0
+  }
+}
+
+
+#Meta-analysis
+library("meta")
+meta_depr <- metagen(est,se,study,data=est_depr,method.tau = "REML")
+metareg(meta_depr,~onesex)
+meta_anx <- metagen(est,se,study,data=est_anx,method.tau = "REML")
+metareg(meta_anx,~onesex)
