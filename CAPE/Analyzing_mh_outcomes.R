@@ -17,13 +17,14 @@ library("ggplot2")
 library("pals")
 library("lme4")
 library("readxl")
+library("performance")
 cape_dir ="C:/Users/marjo/Documents/postdoc/ACE/CAPE/"
 options(scipen = 999)
 
 ARC_mh <- read.csv(paste0(cape_dir,"Outcome_data/ARC_CAPE_outcomes.csv"),header = T)
 BLP_mh <- read.csv(paste0(cape_dir,"Outcome_data/BLP_Outcome_data_20102020.csv"),header = T)
 CAT_mh <- read_excel(paste0(cape_dir,"Outcome_data/CAT_Outcome_data_missingvalues.xlsx"))
-EFC_mh <- read.csv(paste0(cape_dir,"Outcome_data/EFC_CAPE_Outcomes_Updated_09022020.csv"),header = T)
+EFC_mh <- read.csv(paste0(cape_dir,"Outcome_data/EFC_CAPE_Outcomes_Updated_10212021.csv"),header = T)
 KLG_mh <- read.csv(paste0(cape_dir,"Outcome_data/KLG_CAPE Outcomes_08.28.2020.csv"),header = T) 
 LIS_mh <- read.csv(paste0(cape_dir,"Outcome_data/LIS_MHOutcomeS_CAPE.csv"),header = T)
 MFS_mh <- read.csv(paste0(cape_dir,"Outcome_data/MFS_outcomes_final.csv"),header = T)
@@ -97,7 +98,7 @@ CAT_int <- pivot_longer(CAT_mh, cols=4:length(CAT_mh), names_to = c(".value","ti
 
 EFC_int <- EFC_mh %>% rename(DOC_time1=child_PRECOVID_visit_date,DOC_time2=covidsurvey_time1,
                               Age_time1=child_PRECOVID_visit_age,Age_time2=age_COVID,
-                              Anxiety_time1=MASC_child_selfreport_total,
+                              Anxiety_time1=new_MASC_child_selfreport_total,
                               Anxiety_time2=CASPE_mod_child_emotional_experience_time1) 
 EFC_int  <- pivot_longer(EFC_int, cols=4:length(EFC_int), names_to = c(".value","time"),
                          names_pattern = "(.*)_(.*)") %>%
@@ -236,6 +237,21 @@ ALL_int_self <- merge(ALL_int_self, Age_2020,by="ID",all.x=T)
 ALL_int_self <- ALL_int_self %>% 
   filter(Age_2020<18.0&Age_2020>9.0|is.na(Age_2020))
 
+#Make a factor of prepost
+ALL_int_self$PrePost <- factor(ALL_int_self$PrePost, levels=c("Pre","During"))
+
+#Create timespan control variable
+timespan <- ALL_int_self %>%
+  group_by(ID) %>%
+  summarize(latestdate=max(DOC),
+            earliestdate=min(DOC),
+            latestage=max(Age),
+            earliestage=min(Age))
+timespan <- timespan %>%
+  mutate(totalspan=difftime(latestdate, earliestdate, units = "weeks")/52)
+ALL_int_self <- merge(ALL_int_self,timespan[c("ID","totalspan")])
+
+
 # Extra dataframes w/ only studies that used the same questionnaire pre- and During-pandemic
 ALL_anx_self_same <- ALL_int_self %>% filter(Study!="TAG"&Study!="TGR"&Study!="EFC") %>%
   dplyr::select(!Depression)
@@ -244,21 +260,28 @@ ALL_anx_self_tagtgrefc_post <- ALL_int_self %>% filter(!(Study=="TAG"&PrePost=="
 ALL_anx_self_tagtgrefc_pre <- ALL_int_self %>% filter(!(Study=="TAG"&PrePost=="During")) %>%
   filter(!(Study=="TGR"&PrePost=="During")) %>% filter(!(Study=="EFC"&PrePost=="During")) %>% dplyr::select(!Depression)
 
-
-
-
+#Correlate latest pre-pandemic symptom level with average pre-pandemic symptom level
+ALL_pre_mean_latest <- ALL_int_self %>% filter(PrePost=="Pre") %>%
+  group_by(ID) %>%
+  summarize(pre_depression=mean(Depression, na.rm=T),
+            pre_anxiety=mean(Anxiety, na.rm=T),
+            latest_depression=Depression[which.max(DOC)],
+            latest_anxiety=Anxiety[which.max(DOC)])
+cor(ALL_pre_mean_latest[2:5],use="pairwise.complete.obs",method="pearson")
+t.test(ALL_pre_mean_latest$pre_depression,ALL_pre_mean_latest$latest_depression,paired = T)
+t.test(ALL_pre_mean_latest$pre_anxiety,ALL_pre_mean_latest$latest_anxiety,paired = T)
 
 ###########################
 # 3. Modeling change over time and age moderation
 #
 ###########################
 
-ALL_int_self$PrePost <- factor(ALL_int_self$PrePost, levels=c("Pre","During"))
+
 
 ############## Depression 
 
 #Mixed model testing with DOC
-depr_base <- lmerTest::lmer(Depression ~ Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
+depr_base <- lmerTest::lmer(Depression ~ totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
 #depr_doc <- lmerTest::lmer(Depression ~ as.Date(DOC,origin="2016-01-01") + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
 #depr_docexp <- lmerTest::lmer(log(Depression+1) ~ as.Date(DOC,origin="2016-01-01") + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
 #depr_doc_age <- lmerTest::lmer(Depression ~ scale(as.Date(DOC,origin="2016-01-01"))*scale(Age_2020) + Sex + (1|Study/ID), data=ALL_int_self)
@@ -271,24 +294,23 @@ depr_base <- lmerTest::lmer(Depression ~ Sex + Age_2020 + (1|Study/ID), data=ALL
 # Therefore, testing a binary pre- vs During-pandemic variable, with the cutoff at 2020-03-11
 
 #Mixed model testing with Pre vs Post
-depr_doc_2 <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
+depr_doc_2 <- lmerTest::lmer(Depression ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
 #rdepr_doc_2 <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + (1|Study/ID)+ (0+PrePost|Study), data=ALL_int_self)
 #Random slope models did not converge and therefore no random slopes were added in the moderator models below
 anova(depr_base,depr_doc_2)
-summary(depr_doc_2)
 
 #Age moderation
-depr_doc_2a <- lmerTest::lmer(Depression ~ PrePost + Sex + scale(Age_2020) + (1|Study/ID), data=ALL_int_self)
-depr_doc_age_2 <- lmerTest::lmer(Depression ~ PrePost*scale(Age_2020) + Sex + (1|Study/ID), data=ALL_int_self)
+depr_doc_age_2 <- lmerTest::lmer(Depression ~ PrePost*scale(Age_2020) + PrePost:totalspan + totalspan + Sex + (1|Study/ID), data=ALL_int_self)
 
-anova(depr_doc_2a,depr_doc_age_2)
+anova(depr_doc_2,depr_doc_age_2)
 
+summary(depr_doc_2)
 
 
 ############## Anxiety
 
 #Mixed model testing with DOC
-anx_base <- lmerTest::lmer(Anxiety ~ Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
+anx_base <- lmerTest::lmer(Anxiety ~ totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
 #anx_doc <- lmerTest::lmer(Anxiety ~ as.Date(DOC,origin="2016-01-01") + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
 #anx_docexp <- lmerTest::lmer(log(Anxiety+1) ~ as.Date(DOC,origin="2016-01-01") + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
 #anx_doc_age <- lmerTest::lmer(Anxiety ~ scale(as.Date(DOC,origin="2016-01-01"))*scale(Age_2020) + Sex + (1|Study/ID), data=ALL_int_self)
@@ -297,26 +319,25 @@ anx_base <- lmerTest::lmer(Anxiety ~ Sex + Age_2020 + (1|Study/ID), data=ALL_int
 #anova(anx_doc,anx_doc_age)
 
 #Mixed model testing with Pre vs Post
-anx_doc_2 <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
+anx_doc_2 <- lmerTest::lmer(Anxiety ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self)
 #ranx_doc_2 <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID)+ (0+PrePost|Study), data=ALL_int_self)
 #Random slope models did not converge and therefore no random slopes were added in the moderator models below
 anova(anx_base,anx_doc_2)
 
 #Age moderation
-anx_doc_2a <- lmerTest::lmer(Anxiety ~ PrePost + Sex + scale(Age_2020) + (1|Study/ID), data=ALL_int_self)
-anx_doc_age_2 <- lmerTest::lmer(Anxiety ~ PrePost*scale(Age_2020) + Sex + (1|Study/ID), data=ALL_int_self)
+anx_doc_age_2 <- lmerTest::lmer(Anxiety ~ PrePost*scale(Age_2020) + PrePost:totalspan + totalspan + Sex + (1|Study/ID), data=ALL_int_self)
 
-anova(anx_doc_2a,anx_doc_age_2)
-summary(anx_doc_age_2)
+anova(anx_doc_2,anx_doc_age_2)
+summary(anx_doc_2)
 
 #Mixed model testing with Pre vs Post REMOVING TAG AND TIGER AND EFC  
-anx_base_s <- lmerTest::lmer(Anxiety ~ Sex + Age_2020 + (1|Study/ID), data=ALL_anx_self_same)
-anx_doc_s <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_anx_self_same)
+anx_base_s <- lmerTest::lmer(Anxiety ~ totalspan + Sex + scale(Age_2020) + (1|Study/ID), data=ALL_anx_self_same)
+anx_doc_s <- lmerTest::lmer(Anxiety ~ PrePost*totalspan + Sex + scale(Age_2020) + (1|Study/ID), data=ALL_anx_self_same)
 anova(anx_base_s,anx_doc_s)
 
-anx_doc_sa <- lmerTest::lmer(Anxiety ~ PrePost + Sex + scale(Age_2020) + (1|Study/ID), data=ALL_anx_self_same)
-anx_doc_age_s <- lmerTest::lmer(Anxiety ~ PrePost*scale(Age_2020) + Sex + (1|Study/ID), data=ALL_anx_self_same)
-anova(anx_doc_sa,anx_doc_age_s)
+anx_doc_age_s <- lmerTest::lmer(Anxiety ~ PrePost*scale(Age_2020) + PrePost:totalspan + totalspan + Sex + (1|Study/ID), data=ALL_anx_self_same)
+anova(anx_base_s,anx_doc_age_s)
+summary(anx_base_s)
 
 
 ###########################
@@ -392,7 +413,7 @@ ggplot(ALL_int_self,aes(x=PrePost,y=Anxiety)) +
 
 #Age
 ALL_int_self_anx_full <- ALL_int_self %>% 
-  dplyr::select(ID, Study, Sex, Age_2020, PrePost, Anxiety) %>%
+  dplyr::select(ID, Study, Sex, Age_2020, PrePost, totalspan, Anxiety) %>%
   na.omit(.)
 ALL_int_self_anx_full$pred_anx = predict(anx_doc_age_2,type="response")
 ggplot(ALL_int_self_anx_full,aes(x=Age_2020,y=Anxiety)) + 
@@ -405,37 +426,20 @@ ggplot(ALL_int_self_anx_full,aes(x=Age_2020,y=Anxiety)) +
   labs(x="Age in March 2020", y="Anxiety symptoms")  
 
 
-#####################
-# 3b. control variable timespan from first to last assessment
-#
-#####################
-
-timespan <- ALL_int_self %>%
-  group_by(ID,PrePost) %>%
-  summarize(latestdate=max(DOC),
-            earliestdate=min(DOC),
-            latestage=max(Age),
-            earliestage=min(Age))
-timespan <- pivot_wider(timespan,names_from = PrePost,
-                               values_from = c("earliestdate","latestdate","earliestage","latestage")) %>%
-  mutate(totalspan=difftime(latestdate_During, earliestdate_Pre, units = "weeks")/52)
-ALL_int_self_span <- merge(ALL_int_self,timespan[c("ID","totalspan")])
-
-depr_span <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + PrePost:totalspan + (1|Study/ID), data=ALL_int_self_span)
-anx_span <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + PrePost:totalspan + (1|Study/ID), data=ALL_int_self_span)
-
-ggplot(ALL_int_self_span,aes(x=totalspan,y=Anxiety)) + 
+#  control variable timespan from first to last assessment
+ALL_int_self_anx_full$pred_anx2 = predict(anx_doc_2,type="response")
+ggplot(ALL_int_self_anx_full,aes(x=totalspan,y=Anxiety)) + 
   geom_point(aes(color=PrePost,shape=PrePost)) + 
-  geom_smooth(method="lm",color='black',aes(fill=PrePost,linetype=PrePost)) +
+  geom_smooth(method="lm",color='black',aes(x=totalspan,y=pred_anx2,fill=PrePost,linetype=PrePost)) +
   scale_fill_manual(values=c("#00BFC4","#F8766D")) +
   scale_color_manual(values=c("#00BFC4","#F8766D")) +
   theme_minimal(base_size = 14) +
   theme(legend.title = element_blank()) +
-  labs(x="Timespan", y="Anxiety symptoms")  
+  labs(x="Timespan (years)", y="Anxiety symptoms")  
 
 
 #####################
-# 3c. Exploratory analyses of anxiety subscales 
+# 3b. Exploratory analyses of anxiety subscales 
 #
 ####################
 
@@ -512,8 +516,8 @@ ALL_int_self_raceethn %>%
 ############## Depression 
 
 #Mixed model testing with Pre vs Post
-depr_doc_r <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_raceethn_full)
-depr_doc_race <- lmerTest::lmer(Depression ~ PrePost*RaceEthnicity + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_raceethn_full)
+depr_doc_r <- lmerTest::lmer(Depression ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_raceethn_full)
+depr_doc_race <- lmerTest::lmer(Depression ~ PrePost*RaceEthnicity + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_raceethn_full)
 
 anova(depr_doc_r,depr_doc_race)
 summary(depr_doc_race)
@@ -522,8 +526,8 @@ summary(depr_doc_race)
 ############## Anxiety 
 
 #Mixed model testing with Pre vs Post
-anx_doc_r <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_raceethn_full)
-anx_doc_race <- lmerTest::lmer(Anxiety ~ PrePost*RaceEthnicity + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_raceethn_full)
+anx_doc_r <- lmerTest::lmer(Anxiety ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_raceethn_full)
+anx_doc_race <- lmerTest::lmer(Anxiety ~ PrePost*RaceEthnicity + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_raceethn_full)
 
 anova(anx_doc_r,anx_doc_race)
 summary(anx_doc_race)
@@ -531,8 +535,8 @@ summary(anx_doc_race)
 #Retesting without studies that used different questionnaires pre vs During
 ALL_anx_self_same_raceethn <- ALL_int_self_raceethn_full %>% filter(Study!="TAG"&Study!="TGR"&Study!="EFC") %>%
   dplyr::select(!Depression)
-anx_doc_r_same <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_anx_self_same_raceethn)
-anx_doc_race_same <- lmerTest::lmer(Anxiety ~ PrePost*RaceEthnicity + Sex + Age_2020 + (1|Study/ID), data=ALL_anx_self_same_raceethn)
+anx_doc_r_same <- lmerTest::lmer(Anxiety ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_anx_self_same_raceethn)
+anx_doc_race_same <- lmerTest::lmer(Anxiety ~ PrePost*RaceEthnicity + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_anx_self_same_raceethn)
 anova(anx_doc_r_same,anx_doc_race_same)
 summary(anx_doc_race_same)
 
@@ -592,7 +596,7 @@ hist(ALL_int_self_burden$mean_deaths)
 ############## Depression 
 
 ALL_int_self_burden_full <- ALL_int_self_burden %>%
-  select(ID, Study, Sex, Age_2020, PrePost, Depression, mean_cases, mean_deaths) %>%
+  select(ID, Study, totalspan, Sex, Age_2020, PrePost, Depression, mean_cases, mean_deaths) %>%
   na.omit(.)
 ALL_int_self_burden_full_notab <- ALL_int_self_burden_full %>%
   filter(Study!="TAB")
@@ -600,20 +604,20 @@ ALL_int_self_burden_full$PrePost <- factor(ALL_int_self_burden_full$PrePost, lev
 ALL_int_self_burden_full_notab$PrePost <- factor(ALL_int_self_burden_full_notab$PrePost, levels=c("Pre","During"))
 
 #Baseline
-depr_doc_db <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_full)
+depr_doc_db <- lmerTest::lmer(Depression ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_full)
 
 #Case rates
-depr_doc_cases <- lmerTest::lmer(Depression ~ PrePost*scale(sqrt(mean_cases)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_full)
+depr_doc_cases <- lmerTest::lmer(Depression ~ PrePost*scale(sqrt(mean_cases)) + PrePost:totalspan + totalspan  + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_full)
 anova(depr_doc_db,depr_doc_cases)
 summary(depr_doc_cases)
 
 #Death rates
-depr_doc_deaths <- lmerTest::lmer(Depression ~ PrePost*scale(sqrt(mean_deaths)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_full)
+depr_doc_deaths <- lmerTest::lmer(Depression ~ PrePost*scale(sqrt(mean_deaths)) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_full)
 anova(depr_doc_db,depr_doc_deaths)
 
 #without the TAB study
-depr_doc_db_notab <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_full_notab)
-depr_doc_deaths_notab <- lmerTest::lmer(Depression ~ PrePost*sqrt(mean_deaths) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_full_notab)
+depr_doc_db_notab <- lmerTest::lmer(Depression ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_full_notab)
+depr_doc_deaths_notab <- lmerTest::lmer(Depression ~ PrePost*sqrt(mean_deaths) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_full_notab)
 anova(depr_doc_db_notab,depr_doc_deaths_notab)
 
 
@@ -635,7 +639,7 @@ anova(depr_doc_db2,depr_doc_deaths_mid)
 ############## Anxiety 
 
 ALL_int_self_burden_afull <- ALL_int_self_burden %>%
-  select(ID, Study, Sex, Age_2020, PrePost, Anxiety, mean_cases, mean_deaths) %>%
+  select(ID, Study, totalspan, Sex, Age_2020, PrePost, Anxiety, mean_cases, mean_deaths) %>%
   na.omit(.)
 ALL_int_self_burden_afull_notab <- ALL_int_self_burden_afull %>%
   filter(Study!="TAB")
@@ -645,20 +649,20 @@ ALL_int_self_burden_afull_notab$PrePost <- factor(ALL_int_self_burden_afull_nota
 #Mixed model testing PRE-POST WITH MEAN CASE/DEATH RATE WITHIN PP
 
 #baseline
-anx_doc_db <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_afull)
+anx_doc_db <- lmerTest::lmer(Anxiety ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_afull)
 
 #case rate
-anx_doc_cases <- lmerTest::lmer(Anxiety ~ PrePost*scale(sqrt(mean_cases)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_afull)
+anx_doc_cases <- lmerTest::lmer(Anxiety ~ PrePost*scale(sqrt(mean_cases)) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_afull)
 anova(anx_doc_db,anx_doc_cases)
 summary(anx_doc_cases)
 
 #death rate
-anx_doc_deaths <- lmerTest::lmer(Anxiety ~ PrePost*scale(sqrt(mean_deaths)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_afull)
+anx_doc_deaths <- lmerTest::lmer(Anxiety ~ PrePost*scale(sqrt(mean_deaths)) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_afull)
 anova(anx_doc_db,anx_doc_deaths)
 
 #wihout the TAB study
-anx_doc_db_notab <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_afull_notab)
-anx_doc_deaths_notab <- lmerTest::lmer(Anxiety ~ PrePost*sqrt(mean_deaths) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_afull_notab)
+anx_doc_db_notab <- lmerTest::lmer(Anxiety ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_afull_notab)
+anx_doc_deaths_notab <- lmerTest::lmer(Anxiety ~ PrePost*sqrt(mean_deaths) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burden_afull_notab)
 anova(anx_doc_db_notab,anx_doc_deaths_notab)
 
 
@@ -679,38 +683,40 @@ anova(anx_doc_db2,anx_doc_deaths_mid)
 #
 ########################
 
-ALL_int_self_burden$PrePost <- factor(ALL_int_self_burden$PrePost, levels=c("Pre","During"))
 
 #Depression
-ggplot(ALL_int_self_burden,aes(x=mean_cases,y=Depression)) + 
+ALL_int_self_burden_full$pred_depr = predict(depr_doc_cases,type="response")
+ggplot(ALL_int_self_burden_full,aes(x=mean_cases,y=Depression)) + 
   geom_point(aes(color=PrePost,shape=PrePost)) + 
-  geom_smooth(formula=y~sqrt(x),aes(group=PrePost,fill=PrePost,linetype=PrePost)) +
+  geom_smooth(method="lm",color='black',aes(x=mean_cases,y=pred_depr,fill=PrePost,linetype=PrePost)) +
   theme_minimal()+   
   scale_fill_manual(values=c("#00CCCC","#FF3300")) +
   scale_color_manual(values=c("#00CCCC","#FF3300")) +
   labs(x="Cases per 1M people in county/region", y="Depressive symptoms")
 
+ALL_int_self_burden_full_notab$pred_depr = predict(depr_doc_deaths_notab,type="response")
 ggplot(ALL_int_self_burden_full_notab,aes(x=mean_deaths,y=Depression)) + 
   geom_point(aes(color=PrePost,shape=PrePost)) + 
-  geom_smooth(formula=y~sqrt(x),aes(group=PrePost,fill=PrePost,linetype=PrePost)) +
+  geom_smooth(method="lm",color='black',aes(x=mean_deaths,y=pred_depr,fill=PrePost,linetype=PrePost)) +
   scale_fill_manual(values=c("#00CCCC","#FF3300")) +
   scale_color_manual(values=c("#00CCCC","#FF3300")) +
   theme_minimal()+ 
   labs(x="Deaths per 1M people in county/region", y="Depressive symptoms")
 
 #Anxiety
-ALL_int_self_burden$PrePost <- factor(ALL_int_self_burden$PrePost, levels=c("Pre","During"))
-ggplot(ALL_int_self_burden,aes(x=mean_cases,y=Anxiety)) + 
+ALL_int_self_burden_afull$pred_anx = predict(anx_doc_cases,type="response")
+ggplot(ALL_int_self_burden_afull,aes(x=mean_cases,y=Anxiety)) + 
   geom_point(aes(color=PrePost,shape=PrePost)) + 
-  geom_smooth(formula=y~sqrt(x),aes(group=PrePost,fill=PrePost,linetype=PrePost)) +
+  geom_smooth(method="lm",color='black',aes(x=mean_cases,y=pred_anx,fill=PrePost,linetype=PrePost)) +
   scale_fill_manual(values=c("#00CCCC","#FF3300")) +
   scale_color_manual(values=c("#00CCCC","#FF3300")) +
   theme_minimal()+ 
   labs(x="Cases per 1M people in county/region", y="Anxiety symptoms")
 
+ALL_int_self_burden_afull_notab$pred_anx = predict(anx_doc_deaths_notab,type="response")
 ggplot(ALL_int_self_burden_afull_notab,aes(x=mean_deaths,y=Anxiety)) + 
   geom_point(aes(color=PrePost,shape=PrePost)) + 
-  geom_smooth(formula=y~sqrt(x),aes(group=PrePost,fill=PrePost,linetype=PrePost)) +
+  geom_smooth(method="lm",color='black',aes(x=mean_deaths,y=pred_anx,fill=PrePost,linetype=PrePost)) +
   scale_fill_manual(values=c("#00CCCC","#FF3300")) +
   scale_color_manual(values=c("#00CCCC","#FF3300")) +
   theme_minimal()+ 
@@ -739,14 +745,14 @@ ALL_int_self_medianrestric <- left_join(ALL_int_self, median_restric,by="ID") %>
   filter(!is.na(median_Strictness))
 
 #Mixed model testing strictness PRE VERSUS POST
-depr_doc_s1 <- lmerTest::lmer(Depression ~  PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_medianrestric)
-depr_doc_strictness <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_medianrestric)
+depr_doc_s1 <- lmerTest::lmer(Depression ~  PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_medianrestric)
+depr_doc_strictness <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_medianrestric)
 
 anova(depr_doc_s1,depr_doc_strictness)
 summary(depr_doc_strictness)
 
-anx_doc_s1 <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_medianrestric)
-anx_doc_strictness <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_medianrestric)
+anx_doc_s1 <- lmerTest::lmer(Anxiety ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_medianrestric)
+anx_doc_strictness <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_medianrestric)
 
 anova(anx_doc_s1,anx_doc_strictness)
 summary(anx_doc_strictness)
@@ -836,10 +842,10 @@ ALL_int_self_burdenrestric <- merge(ALL_int_self_burden, median_restric,by="ID")
 
 # Depression
 
-depr_doc_c2 <- lmerTest::lmer(Depression ~  PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
-depr_doc_restr_forburden <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
-depr_doc_cases_restr <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_cases)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
-depr_doc_deaths_restr <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_deaths)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+depr_doc_c2 <- lmerTest::lmer(Depression ~  PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+depr_doc_restr_forburden <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+depr_doc_cases_restr <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_cases)) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+depr_doc_deaths_restr <- lmerTest::lmer(Depression ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_deaths)) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
 
 anova(depr_doc_restr_forburden,depr_doc_cases_restr)
 anova(depr_doc_restr_forburden,depr_doc_deaths_restr)
@@ -848,13 +854,13 @@ summary(depr_doc_deaths_restr)
 
 #Anxiety
 
-anx_doc_c2 <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
-anx_doc_restr_forburden <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
-anx_doc_cases_restr <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_cases)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
-anx_doc_deaths_restr <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_deaths)) + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+anx_doc_c2 <- lmerTest::lmer(Anxiety ~ PrePost*totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+anx_doc_restr_forburden <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+anx_doc_cases_restr <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_cases)) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
+anx_doc_deaths_restr <- lmerTest::lmer(Anxiety ~ PrePost*scale(median_Strictness) + PrePost*scale(sqrt(mean_deaths)) + PrePost:totalspan + totalspan + Sex + Age_2020 + (1|Study/ID), data=ALL_int_self_burdenrestric)
 
-anova(anx_doc_restr_forburden,depr_doc_cases_restr)
-anova(anx_doc_restr_forburden,depr_doc_deaths_restr)
+anova(anx_doc_restr_forburden,anx_doc_cases_restr)
+anova(anx_doc_restr_forburden,anx_doc_deaths_restr)
 summary(anx_doc_cases_restr)
 summary(anx_doc_deaths_restr)
 
@@ -991,6 +997,14 @@ summary(highdeaths_by_pp_short$anxiety_ch)
 burden_restric <- merge(mean_burden, median_restric, by="ID", all=T) 
 cor(burden_restric[c("median_Strictness", "mean_cases", "mean_deaths")],use="pairwise.complete.obs", method = "spearman")
 
+### ICC at level 3 for mixed models 
+performance::icc(depr_doc_2)$ICC_adjusted
+performance::icc(anx_doc_2)$ICC_adjusted
+performance::icc(depr_doc_race)$ICC_adjusted
+performance::icc(anx_doc_race)$ICC_adjusted
+performance::icc(depr_doc_cases)$ICC_adjusted
+performance::icc(depr_doc_strictness)$ICC_adjusted
+performance::icc(anx_doc_strictness)$ICC_adjusted
 
 
 ###############################
@@ -1104,9 +1118,9 @@ ggplot(Pre_int_self_anx_full,aes(x=Age,y=Anxiety)) +
 list_studies_depr <- as.vector(c("ARC","CAT","KLG","LIS","MFS","NTTTP","TAG","TGR"))
 list_studies_anx <- as.vector(c("ARC","BLP","CAT","EFC","KLG","LIS","MFS","SDS","TAB","TAG","TGR"))
 est_depr <- data.frame(study=as.character("NA"),est=as.integer(99),se=as.integer(99),onesex=as.integer(99), 
-                       stringsAsFactors=FALSE) 
+                       timespan=as.integer(99),stringsAsFactors=FALSE) 
 est_anx <- data.frame(study=as.character("NA"),est=as.integer(99),se=as.integer(99),onesex=as.integer(99), 
-                      stringsAsFactors=FALSE) 
+                      timespan=as.integer(99),stringsAsFactors=FALSE) 
 rightrow <- 0
 
 for (onestudy in list_studies_depr)
@@ -1120,6 +1134,7 @@ for (onestudy in list_studies_depr)
     est_depr[rightrow,2] <- summary(depr_main_1)$coefficients["PrePostDuring",1]
     est_depr[rightrow,3] <- summary(depr_main_1)$coefficients["PrePostDuring",2]
     est_depr[rightrow,4] <- 1
+    est_depr[rightrow,5] <- mean(ALL_int_self_one$totalspan, na.rm=T)
   }
   else {
     depr_main_1 <- lmerTest::lmer(Depression ~ PrePost + Sex + Age_2020 + (1|ID), data=ALL_int_self_one)
@@ -1127,6 +1142,7 @@ for (onestudy in list_studies_depr)
     est_depr[rightrow,2] <- summary(depr_main_1)$coefficients["PrePostDuring",1]
     est_depr[rightrow,3] <- summary(depr_main_1)$coefficients["PrePostDuring",2]
     est_depr[rightrow,4] <- 0
+    est_depr[rightrow,5] <- mean(ALL_int_self_one$totalspan, na.rm=T)
   }
 }
 
@@ -1143,6 +1159,7 @@ for (onestudy in list_studies_anx)
     est_anx[rightrow,2] <- summary(anx_main_1)$coefficients["PrePostDuring",1]
     est_anx[rightrow,3] <- summary(anx_main_1)$coefficients["PrePostDuring",2]
     est_anx[rightrow,4] <- 1
+    est_anx[rightrow,5] <- mean(ALL_int_self_one$totalspan, na.rm=T)
   }
   else {
     anx_main_1 <- lmerTest::lmer(Anxiety ~ PrePost + Sex + Age_2020 + (1|ID), data=ALL_int_self_one)
@@ -1150,6 +1167,7 @@ for (onestudy in list_studies_anx)
     est_anx[rightrow,2] <- summary(anx_main_1)$coefficients["PrePostDuring",1]
     est_anx[rightrow,3] <- summary(anx_main_1)$coefficients["PrePostDuring",2]
     est_anx[rightrow,4] <- 0
+    est_anx[rightrow,5] <- mean(ALL_int_self_one$totalspan, na.rm=T)
   }
 }
 
@@ -1157,6 +1175,8 @@ for (onestudy in list_studies_anx)
 #Meta-analysis
 library("meta")
 meta_depr <- metagen(est,se,study,data=est_depr,method.tau = "REML")
-metareg(meta_depr,~onesex)
+summary(meta_depr)
+metareg(meta_depr,~onesex+timespan)
 meta_anx <- metagen(est,se,study,data=est_anx,method.tau = "REML")
-metareg(meta_anx,~onesex)
+summary(meta_anx)
+metareg(meta_anx,~onesex+timespan)
